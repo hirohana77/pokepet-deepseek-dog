@@ -9,6 +9,8 @@
 
 > An embodied AI companion dog mod for Minecraft powered by **DeepSeek API**, featuring **Pokéball-style capture**, real-time world perception, thought bubbles, and acrobatic skills!
 
+> ⚠️ **Disclaimer / Note**: This project is a **Proof-of-Concept (PoC) demo** developed with the assistance of **Claude Code**. As an experimental prototype, there may still be minor edge bugs or areas that need further polish. Feel free to fork, customize, and modify the code to suit your own gameplay needs. Contributions, issues, and pull requests are very welcome!
+
 ---
 
 ## 📸 In-Game Screenshots
