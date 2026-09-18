@@ -1,0 +1,30 @@
+{
+	"schemaVersion": 1,
+	"id": "aicreater",
+	"version": "${version}",
+	"name": "AI Creater Companion Dog",
+	"description": "A smart companion dog mod integrated with DeepSeek API, featuring rich interactions, thought bubbles, and custom chat GUI.",
+	"authors": [
+		"AICreater Team"
+	],
+	"contact": {
+		"homepage": "https://fabricmc.net/"
+	},
+	"license": "MIT",
+	"icon": "assets/aicreater/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.aicreater.AICreaterMod"
+		],
+		"client": [
+			"com.aicreater.client.AICreaterModClient"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~1.20.1",
+		"java": ">=17",
+		"fabric-api": "*"
+	}
+}
