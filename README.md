@@ -1,9 +1,77 @@
-# Example Mod
+# 🐶 PokePet DeepSeek Dog (智宠宝可大黄犬)
 
-## Setup
+[English](README_EN.md) | [简体中文](README.md)
 
-For setup instructions, please see the [Fabric Documentation page](https://docs.fabricmc.net/develop/getting-started/creating-a-project#setting-up) related to the IDE that you are using.
+[![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1-green.svg)](https://minecraft.net/)
+[![Fabric](https://img.shields.io/badge/Loader-Fabric-blue.svg)](https://fabricmc.net/)
+[![DeepSeek](https://img.shields.io/badge/AI-DeepSeek--V3-blueviolet.svg)](https://deepseek.com/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## License
+> 一款为 Minecraft 打造的 **AI 具身智能陪伴田园犬** 模组！深度集成 **DeepSeek 官方大模型**、**宝可梦风格收纳球系统** 与 **三大炫酷动作特技**，让大黄犬拥有真实的感知力与情感记忆！
 
-This template is available under the CC0 license. Feel free to learn from it and incorporate it in your own projects.
+---
+
+## 📸 实机截图展示
+
+| 专属拟人化对话卡片 UI | 游戏内实机伴随与生态 |
+| :---: | :---: |
+| ![对话窗口](docs/images/chat_screen.png) | ![实机游戏](docs/images/gameplay.png) |
+
+---
+
+## ✨ 核心特性
+
+- 🐾 **中华田园大黄犬**：温暖金黄毛色，白肚皮与小黑鼻，靠近主人时欢快高频摇尾巴。
+- 🧠 **DeepSeek 官方 AI 智能脑**：
+  - **全景具身环境感知**：小狗感知主人的血量状态（残血惊慌关心）、手持武器、所处维度与天气，还能嗅到 12 格内的苦力怕发出警报！
+  - **专属聊天卡片面板**：按住 Shift + 空手右键打开对话卡片，支持**小狗与角色双重记忆绑定**，长文本物理防溢出，滚轮查看历史！
+  - **游戏内图形化配置**：对话框右上角点击 `⚙ API 配置` 即可填入 Key，保存在本地磁盘，**代码仓库 100% 零泄露**。
+- 💭 **双轨情绪头顶心声**：
+  - 苦力怕贴脸/濒危残血：**0ms 本能应激秒弹气泡（0 Token 消耗）**；
+  - 常态闲聊：极简微感知结合 15s 令牌桶限频，**彻底杜绝 Token 爆炸**！
+- 🔴 **宝可梦收纳球系统**：
+  - 空球右键小狗化作红紫流光收纳，满球右键任意位置，半空爆开金色图腾与烟火，小狗划过抛物线滑翔落地！
+- ⚡ **三大宠物绝技指令**（手持空球右键呼出菜单）：
+  - 🚁 **直升机螺旋起飞**：尾巴 360° 极速旋转成螺旋桨，微风滑翔伴飞，保持 2 格亲密距离！
+  - 🦖 **巨犬倍化术**：体型膨胀 2.6 倍，自带开阔空间智能校验，绝对免疫卡墙窒息伤害！
+  - 🤸 **杂技 360° 后空翻**：就地腾空潇洒空翻，伴随彩色礼花，好感度 +5！
+
+---
+
+## 🚀 极速上手指引
+
+### 1. 运行前准备
+* **Minecraft 版本**：`1.20.1`
+* **模组加载器**：`Fabric Loader >= 0.19.5`
+* **前置依赖**：`Fabric API >= 0.92.12`
+* **Java 环境**：`Java 17+`
+
+### 2. 安装方法
+1. 下载 Release 中的最新 `aicreater-1.0.0.jar`；
+2. 放入您的 `.minecraft/mods` 文件夹；
+3. 启动游戏！
+
+### 3. 配置 DeepSeek API
+1. 进入游戏，使用 **“智能伴侣小狗刷怪蛋”** 生成小狗；
+2. 按住 **Shift + 空手右键** 小狗打开对话卡片；
+3. 点击右上角 **`⚙ API 配置`** 按钮；
+4. 粘贴您的 DeepSeek API Key（格式为 `sk-...`），点击 **“保存并应用”** 即可立即畅聊！
+
+---
+
+## 🎮 常用快捷键与交互
+
+| 动作 | 触发方式 | 效果 |
+| :--- | :--- | :--- |
+| **抚摸 / 坐立切换** | 空手普通右键小狗 | 冒出爱心与呜鸣声，切换坐下或站立跟随 |
+| **投喂食物** | 手持骨头/熟牛肉/熟猪排右键 | 恢复血量并提升好感度（Affection） |
+| **打开 AI 对话框** | 按住 Shift + 空手右键小狗 | 唤起拟人化聊天界面，回车快速发送 |
+| **收回收纳球** | 手持宠物球右键小狗 | 流光粒子吸入，球原位变更为发光满球 |
+| **释放小狗** | 手持满球对任意地方右键 | 抛物线投掷，半空爆开金色图腾滑翔落地 |
+| **打开技能轮盘** | 手持空球对任意地方右键 | 呼出技能指令（螺旋起飞、倍化、后空翻） |
+
+---
+
+## 📄 开源协议
+
+本项目采用 [MIT License](LICENSE) 开源协议。

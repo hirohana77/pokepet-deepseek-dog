@@ -18,7 +18,8 @@ public class ModConfig {
     private static final String FILE_NAME = "aicreater.json";
     private static ModConfig INSTANCE;
 
-    public String apiKey = "sk-1c83c35ab11f46afbe2b99ce14770138";
+    // 开源安全：默认代码库绝不硬编码任何私密 Key，由本地 config/aicreater.json 或游戏内 UI 配置保存
+    public String apiKey = "";
     public String apiUrl = "https://api.deepseek.com/chat/completions";
     public String model = "deepseek-chat";
     public String systemPrompt = "你是一只生活在《Minecraft》世界里、忠诚且通人性的智能小狗，名字叫旺财。你能感知主人的生命值、周围的怪物、天气与地形环境。你的回答风格活泼可爱、会撒娇、会吐槽，偶尔会带上“汪呜~”、“汪汪！”等小狗语气。回答必须简短精炼（1至2句话以内，不超过40字），生动拟人化。";

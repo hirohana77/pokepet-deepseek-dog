@@ -7,9 +7,13 @@ import com.aicreater.network.ModPackets;
 import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityDimensions;
+import net.minecraft.entity.EntityPose;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.ai.goal.*;
+import net.minecraft.entity.damage.DamageSource;
+import net.minecraft.entity.damage.DamageTypes;
 import net.minecraft.entity.data.DataTracker;
 import net.minecraft.entity.data.TrackedData;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
@@ -23,12 +27,15 @@ import net.minecraft.item.Items;
 import net.minecraft.network.PacketByteBuf;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvents;
+import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.LightType;
 import net.minecraft.world.World;
 
@@ -36,20 +43,23 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 伴侣型中华田园犬实体（双轨制情绪事件驱动引擎 + 智能防刷屏冷却系统）
+ * 伴侣型中华田园犬实体
+ * 包含：自然行进朝向解耦（前行时面向前方随行、驻足时回头注视）、直升机尾巴真实旋转、巨犬倍化抗卡窒息保护、杂技后空翻与全景具身感知
  */
 public class CompanionDogEntity extends WolfEntity {
     private static final TrackedData<String> THOUGHT_TEXT = DataTracker.registerData(CompanionDogEntity.class, TrackedDataHandlerRegistry.STRING);
     private static final TrackedData<Integer> THOUGHT_TICKS = DataTracker.registerData(CompanionDogEntity.class, TrackedDataHandlerRegistry.INTEGER);
     private static final TrackedData<Integer> AFFECTION_LEVEL = DataTracker.registerData(CompanionDogEntity.class, TrackedDataHandlerRegistry.INTEGER);
 
-    // 冷却与频率状态控制器
-    private int regularTickCounter = 0;
-    private int globalBubbleCooldown = 0;       // 全局气泡最小防刷间隔（避免接连冒泡）
-    private int emergencyEventCooldown = 0;     // 危机警报冷却（防止同一危险连续触发）
-    private int envEventCooldown = 0;           // 环境突变冷却
+    private static final TrackedData<Boolean> FLYING_MODE = DataTracker.registerData(CompanionDogEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
+    private static final TrackedData<Float> SCALE_FACTOR = DataTracker.registerData(CompanionDogEntity.class, TrackedDataHandlerRegistry.FLOAT);
+    private static final TrackedData<Integer> BACKFLIP_TICKS = DataTracker.registerData(CompanionDogEntity.class, TrackedDataHandlerRegistry.INTEGER);
 
-    // 历史状态跟踪器（用于捕获 0 -> 1 状态突变，避免持续状态高频刷屏）
+    private int regularTickCounter = 0;
+    private int globalBubbleCooldown = 0;
+    private int emergencyEventCooldown = 0;
+    private int envEventCooldown = 0;
+
     private boolean lastOwnerLowHealth = false;
     private boolean lastOwnerOnFire = false;
     private boolean lastCreeperNearby = false;
@@ -69,6 +79,10 @@ public class CompanionDogEntity extends WolfEntity {
         this.dataTracker.startTracking(THOUGHT_TEXT, "汪呜~");
         this.dataTracker.startTracking(THOUGHT_TICKS, 0);
         this.dataTracker.startTracking(AFFECTION_LEVEL, 100);
+
+        this.dataTracker.startTracking(FLYING_MODE, false);
+        this.dataTracker.startTracking(SCALE_FACTOR, 1.0F);
+        this.dataTracker.startTracking(BACKFLIP_TICKS, 0);
     }
 
     @Override
@@ -84,12 +98,94 @@ public class CompanionDogEntity extends WolfEntity {
     }
 
     @Override
-    public boolean handleFallDamage(float fallDistance, float damageMultiplier, net.minecraft.entity.damage.DamageSource damageSource) {
+    public EntityDimensions getDimensions(EntityPose pose) {
+        float scale = this.getScaleFactor();
+        return super.getDimensions(pose).scaled(scale);
+    }
+
+    @Override
+    public boolean damage(DamageSource source, float amount) {
+        if (source.isOf(DamageTypes.IN_WALL) || source.isOf(DamageTypes.FALL)) {
+            return false;
+        }
+        return super.damage(source, amount);
+    }
+
+    @Override
+    public boolean handleFallDamage(float fallDistance, float damageMultiplier, DamageSource damageSource) {
         return false;
     }
 
     @Override
+    public void writeCustomDataToNbt(net.minecraft.nbt.NbtCompound nbt) {
+        super.writeCustomDataToNbt(nbt);
+        if (this.getOwnerUuid() != null) {
+            nbt.putUuid("Owner", this.getOwnerUuid());
+            nbt.putBoolean("IsTamed", true);
+        }
+        nbt.putInt("AffectionLevel", this.getAffection());
+        nbt.putFloat("ScaleFactor", this.getScaleFactor());
+        nbt.putBoolean("FlyingMode", this.isFlyingMode());
+    }
+
+    @Override
+    public void readCustomDataFromNbt(net.minecraft.nbt.NbtCompound nbt) {
+        super.readCustomDataFromNbt(nbt);
+        if (nbt.containsUuid("Owner")) {
+            this.setOwnerUuid(nbt.getUuid("Owner"));
+            this.setTamed(true);
+        } else if (nbt.contains("Owner")) {
+            try {
+                this.setOwnerUuid(nbt.getUuid("Owner"));
+                this.setTamed(true);
+            } catch (Exception ignored) {}
+        }
+        if (nbt.contains("AffectionLevel")) {
+            this.dataTracker.set(AFFECTION_LEVEL, nbt.getInt("AffectionLevel"));
+        }
+        if (nbt.contains("ScaleFactor")) {
+            this.setScaleFactor(nbt.getFloat("ScaleFactor"));
+        }
+        boolean flying = nbt.getBoolean("FlyingMode");
+        this.setFlyingMode(flying);
+        this.setNoGravity(flying);
+    }
+
+    public boolean isFlyingMode() {
+        return this.dataTracker.get(FLYING_MODE);
+    }
+
+    public void setFlyingMode(boolean flying) {
+        this.dataTracker.set(FLYING_MODE, flying);
+        this.setNoGravity(flying);
+        if (flying) {
+            this.setSitting(false);
+            this.setInSittingPose(false);
+        }
+    }
+
+    public float getScaleFactor() {
+        return this.dataTracker.get(SCALE_FACTOR);
+    }
+
+    public void setScaleFactor(float scale) {
+        this.dataTracker.set(SCALE_FACTOR, scale);
+        this.calculateDimensions();
+    }
+
+    public int getBackflipTicks() {
+        return this.dataTracker.get(BACKFLIP_TICKS);
+    }
+
+    public void setBackflipTicks(int ticks) {
+        this.dataTracker.set(BACKFLIP_TICKS, ticks);
+    }
+
+    @Override
     public float getTailAngle() {
+        if (isFlyingMode()) {
+            return 1.45F;
+        }
         float baseAngle = super.getTailAngle();
         if (!this.isInSittingPose() && this.getOwner() != null) {
             float wag = MathHelper.cos(this.age * 0.45F) * 0.22F;
@@ -99,32 +195,86 @@ public class CompanionDogEntity extends WolfEntity {
     }
 
     @Override
+    public void travel(Vec3d movementInput) {
+        if (this.isFlyingMode() && this.canMoveVoluntarily()) {
+            this.updateVelocity(0.08F, movementInput);
+            this.move(net.minecraft.entity.MovementType.SELF, this.getVelocity());
+            this.setVelocity(this.getVelocity().multiply(0.85D));
+            return;
+        }
+        super.travel(movementInput);
+    }
+
+    @Override
     public void tick() {
         super.tick();
 
+        int flip = this.getBackflipTicks();
+        if (flip > 0) {
+            this.setBackflipTicks(flip - 1);
+        }
+
+        // 飞行巡航核心
+        if (this.isFlyingMode()) {
+            World world = this.getWorld();
+            LivingEntity owner = this.getOwner();
+
+            // 1. 柔和气流旋风粒子
+            if (this.age % 2 == 0 && world instanceof ServerWorld serverWorld) {
+                double tailX = this.getX() - Math.sin(this.getYaw() * Math.PI / 180.0D) * 0.45D;
+                double tailZ = this.getZ() + Math.cos(this.getYaw() * Math.PI / 180.0D) * 0.45D;
+                double tailY = this.getY() + 0.45D * this.getScaleFactor();
+                serverWorld.spawnParticles(ParticleTypes.CLOUD, tailX, tailY, tailZ, 2, 0.08D, 0.05D, 0.08D, 0.02D);
+                serverWorld.spawnParticles(ParticleTypes.SWEEP_ATTACK, tailX, tailY, tailZ, 1, 0, 0, 0, 0);
+            }
+
+            // 2. 舒缓柔和的微风滑翔气流声
+            if (this.age % 22 == 0) {
+                world.playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.ITEM_ELYTRA_FLYING, SoundCategory.NEUTRAL, 0.18F, 1.35F);
+            }
+
+            // 3. 飞行跟随：地面逻辑完全保持不变，飞行时严格与角色保持 2.0 个方块的距离
+            if (!world.isClient && owner != null) {
+                float ownerYawRad = (float) (owner.getYaw() * Math.PI / 180.0D);
+                // 空间位置：位于角色侧边保持精准 2.0 格距离，高度在肩膀上方 (Y + 1.2)
+                double offsetX = -Math.sin(ownerYawRad - 0.45F) * 2.0D;
+                double offsetZ = Math.cos(ownerYawRad - 0.45F) * 2.0D;
+                double targetX = owner.getX() + offsetX;
+                double targetZ = owner.getZ() + offsetZ;
+                double targetY = owner.getY() + 1.2D;
+
+                Vec3d toTarget = new Vec3d(targetX - this.getX(), targetY - this.getY(), targetZ - this.getZ());
+                double dist = toTarget.length();
+
+                if (dist > 0.3D) {
+                    Vec3d flyVel = toTarget.normalize().multiply(Math.min(0.35D, dist * 0.16D));
+                    this.setVelocity(this.getVelocity().multiply(0.62D).add(flyVel));
+                    this.velocityModified = true;
+                }
+
+                // 飞行悬停时平滑注视角色
+                this.getLookControl().lookAt(owner, 25.0F, 25.0F);
+            }
+        }
+
         if (!this.getWorld().isClient) {
-            // 1. 气泡存活时间递减
             int currentTicks = this.dataTracker.get(THOUGHT_TICKS);
             if (currentTicks > 0) {
                 this.dataTracker.set(THOUGHT_TICKS, currentTicks - 1);
             }
 
-            // 2. 冷却计数器递减
             if (globalBubbleCooldown > 0) globalBubbleCooldown--;
             if (emergencyEventCooldown > 0) emergencyEventCooldown--;
             if (envEventCooldown > 0) envEventCooldown--;
 
-            // 3. 实时事件感知扫描（每 10 ticks 检查一次环境与角色状态跃迁）
             if (this.age % 10 == 0) {
                 checkStateTransitionAndTrigger();
             }
 
-            // 4. 常态闲聊心流低频轮询（默认 45~60 秒周期）
             regularTickCounter++;
             int regularInterval = Math.max(20, ModConfig.get().mindIntervalSeconds) * 20;
             if (regularTickCounter >= regularInterval) {
                 regularTickCounter = 0;
-                // 仅在全局冷却完毕且当前没有冒泡时触发常态闲聊
                 if (globalBubbleCooldown <= 0 && currentTicks <= 0) {
                     triggerEnvironmentThought();
                 }
@@ -132,16 +282,74 @@ public class CompanionDogEntity extends WolfEntity {
         }
     }
 
-    /**
-     * 具身事件驱动：捕获世界与主人状态的突变（0 -> 1 跃迁），按优先级触发即时心声反应
-     */
+    public void executePetSkill(int skillId, PlayerEntity player) {
+        World world = this.getWorld();
+        if (world.isClient) return;
+
+        if (skillId == 1) {
+            boolean nextFly = !this.isFlyingMode();
+            this.setFlyingMode(nextFly);
+
+            if (nextFly) {
+                this.setVelocity(0.0D, 0.45D, 0.0D);
+                this.velocityModified = true;
+                if (world instanceof ServerWorld sw) {
+                    sw.spawnParticles(ParticleTypes.EXPLOSION, this.getX(), this.getY(), this.getZ(), 1, 0, 0, 0, 0);
+                    sw.spawnParticles(ParticleTypes.CLOUD, this.getX(), this.getY(), this.getZ(), 20, 0.4D, 0.2D, 0.4D, 0.05D);
+                }
+                world.playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.ENTITY_FIREWORK_ROCKET_LAUNCH, SoundCategory.PLAYERS, 1.0F, 1.2F);
+                this.setThought("🚁 螺旋尾巴启动！我飞起来啦~", 140);
+                player.sendMessage(Text.literal("§e✨ 伴侣小狗开启了【直升机尾巴空中飞行巡航】模式！"), true);
+            } else {
+                world.playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.ENTITY_WOLF_WHINE, SoundCategory.PLAYERS, 1.0F, 1.1F);
+                this.setThought("缓缓降落回到地面啦~汪！", 100);
+                player.sendMessage(Text.literal("§a✨ 伴侣小狗已平稳降落回到地面。"), true);
+            }
+        } else if (skillId == 2) {
+            boolean isGiant = this.getScaleFactor() > 1.5F;
+            if (!isGiant) {
+                Box futureBox = this.getBoundingBox().expand(1.2D, 1.5D, 1.2D);
+                if (world.getBlockCollisions(this, futureBox).iterator().hasNext()) {
+                    this.refreshPositionAndAngles(player.getX(), player.getY(), player.getZ(), this.getYaw(), 0.0F);
+                }
+                this.setScaleFactor(2.6F);
+                if (world instanceof ServerWorld sw) {
+                    sw.spawnParticles(ParticleTypes.POOF, this.getX(), this.getY() + 1.0D, this.getZ(), 40, 0.6D, 0.6D, 0.6D, 0.1D);
+                    sw.spawnParticles(ParticleTypes.TOTEM_OF_UNDYING, this.getX(), this.getY() + 1.0D, this.getZ(), 35, 0.5D, 0.5D, 0.5D, 0.2D);
+                }
+                world.playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.ENTITY_RAVAGER_ROAR, SoundCategory.PLAYERS, 0.7F, 1.4F);
+                this.setThought("吼呜！巨型大黄登场！威武霸气！", 140);
+                player.sendMessage(Text.literal("§6⚡ 伴侣小狗激活了【巨犬倍化术】（2.6倍体型，免疫窒息）！"), true);
+            } else {
+                this.setScaleFactor(1.0F);
+                if (world instanceof ServerWorld sw) {
+                    sw.spawnParticles(ParticleTypes.POOF, this.getX(), this.getY() + 0.5D, this.getZ(), 20, 0.3D, 0.3D, 0.3D, 0.05D);
+                }
+                world.playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.ENTITY_WOLF_SHAKE, SoundCategory.PLAYERS, 1.0F, 1.2F);
+                this.setThought("变回小巧可爱形态啦~汪！", 100);
+                player.sendMessage(Text.literal("§a✨ 伴侣小狗恢复为小巧可爱常态。"), true);
+            }
+        } else if (skillId == 3) {
+            this.setBackflipTicks(16);
+            this.setVelocity(0.0D, 0.44D, 0.0D);
+            this.velocityModified = true;
+
+            if (world instanceof ServerWorld sw) {
+                sw.spawnParticles(ParticleTypes.FIREWORK, this.getX(), this.getY() + 0.5D, this.getZ(), 25, 0.3D, 0.3D, 0.3D, 0.15D);
+                sw.spawnParticles(ParticleTypes.WAX_ON, this.getX(), this.getY() + 0.5D, this.getZ(), 15, 0.2D, 0.2D, 0.2D, 0.1D);
+            }
+            world.playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.ENTITY_PLAYER_LEVELUP, SoundCategory.PLAYERS, 0.8F, 1.9F);
+            this.addAffection(5);
+            this.setThought("看我招牌后空翻！帅吧主人~", 120);
+            player.sendMessage(Text.literal("§d🤸 伴侣小狗表演了【360°炫酷杂技后空翻】，好感度 +5！"), true);
+        }
+    }
+
     private void checkStateTransitionAndTrigger() {
         LivingEntity owner = this.getOwner();
         World world = this.getWorld();
 
-        // --- P0 级：致命危机事件（即时本能反应，高优先级） ---
         if (emergencyEventCooldown <= 0 && owner instanceof PlayerEntity player) {
-            // (1) 苦力怕突发潜入警戒
             Box box = this.getBoundingBox().expand(8.0D, 4.0D, 8.0D);
             List<CreeperEntity> creepers = world.getEntitiesByClass(CreeperEntity.class, box, e -> e.isAlive());
             boolean hasCreeper = !creepers.isEmpty();
@@ -152,7 +360,6 @@ public class CompanionDogEntity extends WolfEntity {
             }
             if (!hasCreeper) lastCreeperNearby = false;
 
-            // (2) 主人身上着火
             boolean onFire = player.isOnFire();
             if (onFire && !lastOwnerOnFire) {
                 lastOwnerOnFire = true;
@@ -161,7 +368,6 @@ public class CompanionDogEntity extends WolfEntity {
             }
             if (!onFire) lastOwnerOnFire = false;
 
-            // (3) 主人生命值跌破残血危险线 (<= 6.0 点血量)
             boolean lowHp = player.getHealth() <= 6.0F && player.getHealth() > 0;
             if (lowHp && !lastOwnerLowHealth) {
                 lastOwnerLowHealth = true;
@@ -171,9 +377,7 @@ public class CompanionDogEntity extends WolfEntity {
             if (!lowHp) lastOwnerLowHealth = false;
         }
 
-        // --- P1 级：重要环境与空间跃迁事件（冷却 35 秒） ---
         if (envEventCooldown <= 0 && globalBubbleCooldown <= 0) {
-            // (1) 维度突变：进入下界地狱
             boolean inNether = world.getRegistryKey().getValue().getPath().equals("the_nether");
             if (inNether && !lastInNether) {
                 lastInNether = true;
@@ -182,7 +386,6 @@ public class CompanionDogEntity extends WolfEntity {
             }
             if (!inNether) lastInNether = false;
 
-            // (2) 深入地下深渊矿洞 (Y < 0)
             boolean deepCave = this.getBlockY() < 0;
             if (deepCave && !lastInDeepCave) {
                 lastInDeepCave = true;
@@ -191,7 +394,6 @@ public class CompanionDogEntity extends WolfEntity {
             }
             if (!deepCave) lastInDeepCave = false;
 
-            // (3) 雷暴大雨突变
             boolean thundering = world.isThundering();
             if (thundering && !lastThundering) {
                 lastThundering = true;
@@ -202,12 +404,9 @@ public class CompanionDogEntity extends WolfEntity {
         }
     }
 
-    /**
-     * 弹出本能事件心声气泡（带音效、设置冷却防刷屏）
-     */
     private void popReflexBubble(String text, int showTicks, net.minecraft.sound.SoundEvent sound, int specificCooldown) {
         this.setThought(text, showTicks);
-        this.globalBubbleCooldown = 16 * 20; // 全局防刷保护：至少间隔 16 秒
+        this.globalBubbleCooldown = 16 * 20;
         this.emergencyEventCooldown = specificCooldown;
         this.envEventCooldown = specificCooldown;
         if (sound != null) {
@@ -215,13 +414,31 @@ public class CompanionDogEntity extends WolfEntity {
         }
     }
 
-    /**
-     * 全景多维具身感知采集器（收集角色、世界、天气与周围生物态势快照）
-     */
+    public String collectMicroContext() {
+        World world = this.getWorld();
+        String dim = world.getRegistryKey().getValue().getPath().equals("overworld") ? "主世界" : "异次元";
+        String weather = world.isRaining() ? "下雨" : "晴朗";
+        String depth = this.getBlockY() < 0 ? "深层矿洞" : "地表";
+        LivingEntity owner = this.getOwner();
+        String hpStatus = (owner != null && owner.getHealth() <= 6.0F) ? "主人危险残血" : "主人健康";
+        return dim + ", " + weather + ", " + depth + ", " + hpStatus;
+    }
+
+    public void triggerEnvironmentThought() {
+        if (this.getWorld().isClient) return;
+
+        String microState = collectMicroContext();
+        DeepSeekService.generateMindThoughtStateless(microState).thenAccept(thought -> {
+            if (thought != null && !thought.isEmpty()) {
+                this.setThought(thought, 140);
+                this.globalBubbleCooldown = 18 * 20;
+            }
+        });
+    }
+
     public String collectRealTimeState() {
         StringBuilder sb = new StringBuilder();
 
-        // 1. 角色状态快照 (Player State)
         LivingEntity owner = this.getOwner();
         if (owner instanceof PlayerEntity player) {
             float hp = player.getHealth();
@@ -254,7 +471,6 @@ public class CompanionDogEntity extends WolfEntity {
             sb.append("\n");
         }
 
-        // 2. 世界时空与微环境 (World & Environment)
         World world = this.getWorld();
         sb.append("【世界时空】");
         String dimension = world.getRegistryKey().getValue().getPath();
@@ -290,7 +506,6 @@ public class CompanionDogEntity extends WolfEntity {
         }
         sb.append("\n");
 
-        // 3. 周围 12 格生物雷达 (Nearby Entity Radar)
         Box radarBox = this.getBoundingBox().expand(12.0D, 6.0D, 12.0D);
         List<Entity> nearbyEntities = world.getOtherEntities(this, radarBox);
 
@@ -324,32 +539,6 @@ public class CompanionDogEntity extends WolfEntity {
         sb.append("; 小狗好感度: ").append(this.getAffection()).append("/200 (状态: ").append(this.isInSittingPose() ? "坐下小憩" : "跟随探险").append(")");
 
         return sb.toString();
-    }
-
-    /**
-     * 极轻量微感知快照（仅 20~30 字符，专用于头顶气泡心声，大幅减少 Prompt Input Token 开销）
-     */
-    public String collectMicroContext() {
-        World world = this.getWorld();
-        String dim = world.getRegistryKey().getValue().getPath().equals("overworld") ? "主世界" : "异次元";
-        String weather = world.isRaining() ? "下雨" : "晴朗";
-        String depth = this.getBlockY() < 0 ? "深层矿洞" : "地表";
-        LivingEntity owner = this.getOwner();
-        String hpStatus = (owner != null && owner.getHealth() <= 6.0F) ? "主人危险残血" : "主人健康";
-        return dim + ", " + weather + ", " + depth + ", " + hpStatus;
-    }
-
-    public void triggerEnvironmentThought() {
-        if (this.getWorld().isClient) return;
-
-        // 使用极简微感知 + 无状态轻量通道，绝不污染对话记忆，Token 开销削减 85%
-        String microState = collectMicroContext();
-        DeepSeekService.generateMindThoughtStateless(microState).thenAccept(thought -> {
-            if (thought != null && !thought.isEmpty()) {
-                this.setThought(thought, 140);
-                this.globalBubbleCooldown = 18 * 20; // 闲聊后进入 18 秒防刷冷却
-            }
-        });
     }
 
     public void setThought(String text, int ticks) {
@@ -410,11 +599,11 @@ public class CompanionDogEntity extends WolfEntity {
             this.getWorld().addParticle(ParticleTypes.HEART, this.getX(), this.getY() + 0.6D, this.getZ(), 0.0D, 0.2D, 0.0D);
         }
 
-        // 2. 潜行 + 空手：打开专属宠物聊天界面（传递持久化 UUID 绑定）
+        // 2. 潜行 + 空手：打开专属宠物聊天界面
         if (player.isSneaking() && itemStack.isEmpty()) {
             if (player instanceof ServerPlayerEntity serverPlayer) {
                 PacketByteBuf buf = PacketByteBufs.create();
-                buf.writeUuid(this.getUuid()); // 写入小狗唯一持久化 UUID
+                buf.writeUuid(this.getUuid());
                 buf.writeInt(this.getId());
                 buf.writeString(this.getName().getString());
                 buf.writeInt(this.getAffection());

@@ -3,6 +3,7 @@ package com.aicreater.client;
 import com.aicreater.AICreaterMod;
 import com.aicreater.client.renderer.CompanionDogRenderer;
 import com.aicreater.client.screen.PetChatScreen;
+import com.aicreater.client.screen.PetSkillScreen;
 import com.aicreater.network.ModPackets;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -16,12 +17,12 @@ import java.util.UUID;
 public class AICreaterModClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
-        System.out.println("[AICreater] 正在初始化客户端渲染与交互界面 (支持多对多持久化对话绑定)...");
+        System.out.println("[AICreater] 正在初始化客户端渲染与交互界面 (支持宠物技能菜单与持久化对话)...");
 
-        // 1. 注册伴侣小狗实体渲染器（附带头顶心声气泡渲染）
+        // 1. 注册伴侣小狗实体渲染器（附带头顶心声气泡、倍化体型与360°后空翻骨骼旋转动画）
         EntityRendererRegistry.register(AICreaterMod.COMPANION_DOG, CompanionDogRenderer::new);
 
-        // 2. 注册服务端通知打开小狗专属聊天界面数据包接收器（解析小狗持久化 UUID）
+        // 2. 注册服务端通知打开小狗专属聊天界面数据包接收器
         ClientPlayNetworking.registerGlobalReceiver(ModPackets.S2C_OPEN_PET_SCREEN, (client, handler, buf, responseSender) -> {
             UUID dogUuid = buf.readUuid();
             int entityId = buf.readInt();
@@ -46,6 +47,19 @@ public class AICreaterModClient implements ClientModInitializer {
             });
         });
 
-        System.out.println("[AICreater] 客户端初始化完毕！");
+        // 4. 注册服务端通知打开小狗专属技能指令菜单数据包接收器
+        ClientPlayNetworking.registerGlobalReceiver(ModPackets.S2C_OPEN_SKILL_MENU, (client, handler, buf, responseSender) -> {
+            int entityId = buf.readInt();
+            String dogName = buf.readString();
+            boolean isFlying = buf.readBoolean();
+            float scaleFactor = buf.readFloat();
+            int affection = buf.readInt();
+
+            client.execute(() -> {
+                client.setScreen(new PetSkillScreen(entityId, dogName, isFlying, scaleFactor, affection));
+            });
+        });
+
+        System.out.println("[AICreater] 客户端初始化完毕！三大技能轮盘已就绪。");
     }
 }

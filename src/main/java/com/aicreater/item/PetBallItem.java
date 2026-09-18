@@ -2,6 +2,9 @@ package com.aicreater.item;
 
 import com.aicreater.AICreaterMod;
 import com.aicreater.entity.CompanionDogEntity;
+import com.aicreater.network.ModPackets;
+import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.client.item.TooltipContext;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.player.PlayerEntity;
@@ -9,7 +12,9 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.ItemUsageContext;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.network.PacketByteBuf;
 import net.minecraft.particle.ParticleTypes;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvents;
@@ -17,14 +22,18 @@ import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.TypedActionResult;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Comparator;
 import java.util.List;
 
 /**
- * 宝可梦风格宠物收纳球（支持对狗收纳，所有角度释放均呈现统一经典的“抛出 -> 空中爆开召唤 -> 抛物线飘逸落地”全套弧线效果）
+ * 宝可梦风格宠物收纳球
+ * 满球：全场景抛物线释放小狗
+ * 空球：右键小狗收回，右键任意地方呼出【宠物专属技能指令菜单】
  */
 public class PetBallItem extends Item {
     public static final String NBT_PET_DATA = "PetData";
@@ -58,7 +67,11 @@ public class PetBallItem extends Item {
             return ActionResult.SUCCESS;
         }
 
-        if (!dog.isOwner(user)) {
+        // 无论先前状态如何，如果该小狗尚未绑定主人，手持宠物球第一时间直接认主
+        if (!dog.isTamed() || dog.getOwnerUuid() == null) {
+            dog.setOwner(user);
+            dog.setTamed(true);
+        } else if (!dog.isOwner(user)) {
             user.sendMessage(Text.literal("§c这只小狗不属于你，无法收纳！"), true);
             return ActionResult.FAIL;
         }
@@ -114,7 +127,9 @@ public class PetBallItem extends Item {
     }
 
     /**
-     * 空白处直接右键：全场景统一触发“抛出 -> 空中爆开召唤 -> 抛物线降落”经典全套弧线动效
+     * 空白处直接右键：
+     * 1. 若为满球：全场景触发“抛出 -> 空中顶点爆开召唤 -> 抛物线飘逸落地”
+     * 2. 若为空球：搜索周围已释放的小狗，直接呼出【专属宠物技能菜单】！
      */
     @Override
     public TypedActionResult<ItemStack> use(World world, PlayerEntity user, Hand hand) {
@@ -125,13 +140,17 @@ public class PetBallItem extends Item {
                 executeArcRelease(serverWorld, stack, user);
             }
             return TypedActionResult.success(stack, world.isClient());
+        } else {
+            // 空球右键：呼出宠物技能指令菜单
+            if (!world.isClient && user instanceof ServerPlayerEntity serverPlayer) {
+                openSkillMenuForNearbyPet(world, serverPlayer);
+            }
+            return TypedActionResult.success(stack, world.isClient());
         }
-
-        return super.use(world, user, hand);
     }
 
     /**
-     * 对方块右键：同样统一呈现出球抛物线弧线效果
+     * 对方块右键：同样逻辑统一
      */
     @Override
     public ActionResult useOnBlock(ItemUsageContext context) {
@@ -139,21 +158,50 @@ public class PetBallItem extends Item {
         ItemStack stack = context.getStack();
         PlayerEntity user = context.getPlayer();
 
-        if (!hasPet(stack)) {
-            return ActionResult.PASS;
-        }
-
-        if (!world.isClient && world instanceof ServerWorld serverWorld && user != null) {
-            executeArcRelease(serverWorld, stack, user);
+        if (hasPet(stack)) {
+            if (!world.isClient && world instanceof ServerWorld serverWorld && user != null) {
+                executeArcRelease(serverWorld, stack, user);
+                return ActionResult.SUCCESS;
+            }
             return ActionResult.SUCCESS;
+        } else {
+            if (!world.isClient && user instanceof ServerPlayerEntity serverPlayer) {
+                openSkillMenuForNearbyPet(world, serverPlayer);
+                return ActionResult.SUCCESS;
+            }
         }
 
-        return ActionResult.SUCCESS;
+        return ActionResult.PASS;
     }
 
     /**
-     * 全局统一的宝可梦抛物线弧线召唤逻辑：
-     * 无论仰望天空还是平视前方，均在前方上空划出抛球星轨 -> 空中顶点爆发金光与烟火 -> 小狗破球而出顺应物理重力弧线滑翔降落
+     * 寻找周围 18 格内属于玩家的小狗并呼出技能菜单
+     */
+    private void openSkillMenuForNearbyPet(World world, ServerPlayerEntity player) {
+        Box searchBox = player.getBoundingBox().expand(18.0D, 10.0D, 18.0D);
+        List<CompanionDogEntity> dogs = world.getEntitiesByClass(CompanionDogEntity.class, searchBox, d -> d.isOwner(player) && d.isAlive());
+
+        if (dogs.isEmpty()) {
+            player.sendMessage(Text.literal("§e🐾 周围 18 格内未找到属于你的伴侣小狗（需在附近且处于释放状态）"), true);
+            return;
+        }
+
+        // 优先选择距离玩家最近的小狗
+        dogs.sort(Comparator.comparingDouble(d -> d.squaredDistanceTo(player)));
+        CompanionDogEntity targetDog = dogs.get(0);
+
+        PacketByteBuf buf = PacketByteBufs.create();
+        buf.writeInt(targetDog.getId());
+        buf.writeString(targetDog.getName().getString());
+        buf.writeBoolean(targetDog.isFlyingMode());
+        buf.writeFloat(targetDog.getScaleFactor());
+        buf.writeInt(targetDog.getAffection());
+
+        ServerPlayNetworking.send(player, ModPackets.S2C_OPEN_SKILL_MENU, buf);
+    }
+
+    /**
+     * 全局统一的宝可梦抛物线弧线召唤逻辑
      */
     private void executeArcRelease(ServerWorld world, ItemStack stack, PlayerEntity user) {
         NbtCompound nbt = stack.getNbt();
@@ -161,7 +209,6 @@ public class PetBallItem extends Item {
 
         Vec3d look = user.getRotationVec(1.0F);
 
-        // 计算水平朝向（保证哪怕平视也能稳稳形成向前上方的优美抛物线）
         double horizX = look.x;
         double horizZ = look.z;
         double horizLen = Math.sqrt(horizX * horizX + horizZ * horizZ);
@@ -173,15 +220,12 @@ public class PetBallItem extends Item {
         horizX /= horizLen;
         horizZ /= horizLen;
 
-        // 动态计算半空中的出球顶点（Apex）：
-        // 距离玩家前方约 3.2 格，高度在视线上方约 1.5 ~ 2.5 格
         double apexDist = 3.2D;
         double apexHeight = Math.max(1.4D, 1.2D + (look.y > 0 ? look.y * 3.0D : 0.2D));
         double apexX = user.getX() + horizX * apexDist;
         double apexY = user.getEyeY() + apexHeight;
         double apexZ = user.getZ() + horizZ * apexDist;
 
-        // 1. 抛出弧线流光轨迹：从玩家眼前沿抛物线向 Apex 顶点喷洒密集星轨粒子
         Vec3d eyePos = user.getEyePos();
         int steps = 15;
         for (int i = 1; i <= steps; i++) {
@@ -194,14 +238,12 @@ public class PetBallItem extends Item {
         }
         world.playSound(null, user.getX(), user.getY(), user.getZ(), SoundEvents.ENTITY_SNOWBALL_THROW, SoundCategory.PLAYERS, 0.9F, 1.2F);
 
-        // 2. 空中顶点爆开召唤：爆发刺目强闪光 + 金色图腾光环 + 烟火爆破环
         world.spawnParticles(ParticleTypes.FLASH, apexX, apexY + 0.2D, apexZ, 1, 0, 0, 0, 0);
         world.spawnParticles(ParticleTypes.TOTEM_OF_UNDYING, apexX, apexY, apexZ, 60, 0.5D, 0.5D, 0.5D, 0.35D);
         world.spawnParticles(ParticleTypes.FIREWORK, apexX, apexY, apexZ, 35, 0.4D, 0.4D, 0.4D, 0.25D);
         world.playSound(null, apexX, apexY, apexZ, SoundEvents.ENTITY_FIREWORK_ROCKET_BLAST, SoundCategory.PLAYERS, 1.2F, 1.1F);
         world.playSound(null, apexX, apexY, apexZ, SoundEvents.ENTITY_EVOKER_CAST_SPELL, SoundCategory.PLAYERS, 1.0F, 1.6F);
 
-        // 3. 小狗破球诞生，赋予向前下方的抛物线动量（自然滑翔降落到地面）
         NbtCompound petData = nbt.getCompound(NBT_PET_DATA);
         CompanionDogEntity dog = new CompanionDogEntity(AICreaterMod.COMPANION_DOG, world);
         dog.readNbt(petData);
@@ -211,15 +253,17 @@ public class PetBallItem extends Item {
         dog.setTamed(true);
         dog.setSitting(false);
         dog.setInSittingPose(false);
+        dog.setFlyingMode(false);
+        dog.setNoGravity(false);
+        dog.fallDistance = 0.0F;
+        dog.setOnGround(false);
         dog.setThought("哇！飞出来啦！汪汪~", 140);
 
-        // 赋予向前水平速度与微向上初始冲量，在重力作用下呈现出极度平滑优雅的下坠落地抛物线
-        dog.setVelocity(horizX * 0.38D, 0.12D, horizZ * 0.38D);
+        dog.setVelocity(horizX * 0.35D, 0.04D, horizZ * 0.35D);
         dog.velocityModified = true;
 
         world.spawnEntity(dog);
 
-        // 4. 手中宠物球原位恢复为空球
         nbt.remove(NBT_PET_DATA);
         nbt.putBoolean(NBT_HAS_PET, false);
         nbt.remove("PetName");
@@ -240,10 +284,11 @@ public class PetBallItem extends Item {
             tooltip.add(Text.literal("§6🐾 已收纳宠物: §f" + name));
             tooltip.add(Text.literal("§d❤ 好感度: §f" + affection));
             tooltip.add(Text.literal(String.format("§a❤ 生命值: §f%.1f/20", hp)));
-            tooltip.add(Text.literal("§e👉 右键即可抛出宠物球，体验飞跃召唤弧线！"));
+            tooltip.add(Text.literal("§e👉 右键任意位置（对空/对地）均可抛球飞跃召唤"));
         } else {
             tooltip.add(Text.literal("§7[空收纳球]"));
             tooltip.add(Text.literal("§b👉 手持此球对着你的小狗右键即可收纳"));
+            tooltip.add(Text.literal("§6👉 释放小狗后，手持此球右键任意地方即可打开【宠物技能菜单】"));
         }
         super.appendTooltip(stack, world, tooltip, context);
     }

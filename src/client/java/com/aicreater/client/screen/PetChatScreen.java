@@ -88,6 +88,14 @@ public class PetChatScreen extends Screen {
                 .dimensions(cardX + cardWidth - 66, cardY + cardHeight - 34, 50, 20)
                 .build();
         this.addDrawableChild(this.sendButton);
+
+        // 标题栏右侧 API 配置按钮 (⚙ 配置)
+        ButtonWidget configButton = ButtonWidget.builder(Text.literal("⚙ API 配置"), button -> {
+            if (this.client != null) {
+                this.client.setScreen(new PetConfigScreen(this));
+            }
+        }).dimensions(cardX + cardWidth - 78, cardY + 6, 68, 18).build();
+        this.addDrawableChild(configButton);
     }
 
     private void sendCurrentMessage() {
